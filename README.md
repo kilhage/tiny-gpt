@@ -19,7 +19,6 @@ This repo intentionally stays small and readable rather than fast or feature-com
 - **`generate.py`**: loads `tiny_gpt.pt` and generates text from a prompt.
 - **`data.txt`**: your training corpus (plain UTF-8 text).
 - **`pyproject.toml` / `uv.lock`**: Python deps (works great with `uv`).
-- **`main.py`**: currently a placeholder “hello world” script (not used for training).
 
 ---
 
@@ -52,6 +51,34 @@ python -c "import torch; print('mps?', torch.backends.mps.is_available())"
 ```
 
 If `mps? True` prints, PyTorch can use your Mac GPU via Metal.
+
+### Troubleshooting (PyTorch)
+
+If you see an error like:
+
+```bash
+ImportError: cannot import name '_initExtension' from 'torch._C'
+```
+
+it usually means your PyTorch install is **corrupted** (Python is importing `torch/_C/` as a package instead of the compiled `torch._C` extension).
+
+The most reliable fix is to recreate the virtual environment:
+
+```bash
+cd tiny-gpt
+rm -rf .venv
+uv cache clean
+uv sync
+uv run python -c "import torch; print(torch.__version__); print('mps?', torch.backends.mps.is_available())"
+```
+
+If you want to double-check you’re not running under Rosetta, confirm:
+
+```bash
+uv run python -c "import platform; print(platform.machine())"
+```
+
+It should print `arm64` on Apple Silicon.
 
 ---
 
