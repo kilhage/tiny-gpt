@@ -1,0 +1,319 @@
+import math
+import time
+from dataclasses import dataclass
+
+import numpy as np
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+
+# -------------------------
+# Config
+# -------------------------
+@dataclass
+class GPTConfig:
+    # data
+    batch_size: int = 64
+    block_size: int = 256  # context length
+    # model
+    n_layer: int = 6
+    n_head: int = 6
+    n_embd: int = 384
+    dropout: float = 0.1
+    # training
+    max_steps: int = 3000
+    eval_interval: int = 250
+    eval_batches: int = 50
+    learning_rate: float = 3e-4
+    weight_decay: float = 0.1
+    grad_clip: float = 1.0
+    # runtime
+    device: str = "auto"  # "auto" | "mps" | "cpu"
+
+
+# -------------------------
+# Utilities
+# -------------------------
+def get_device(cfg: GPTConfig) -> torch.device:
+    if cfg.device == "cpu":
+        return torch.device("cpu")
+    if cfg.device == "mps":
+        return torch.device("mps")
+    # auto
+    if torch.backends.mps.is_available():
+        return torch.device("mps")
+    return torch.device("cpu")
+
+
+def set_seed(seed: int = 1337) -> None:
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+
+
+# -------------------------
+# Char-level tokenizer (simple + reliable)
+# -------------------------
+class CharTokenizer:
+    def __init__(self, text: str):
+        chars = sorted(list(set(text)))
+        self.stoi = {ch: i for i, ch in enumerate(chars)}
+        self.itos = {i: ch for ch, i in self.stoi.items()}
+        self.vocab_size = len(chars)
+
+    def encode(self, s: str) -> list[int]:
+        return [self.stoi[c] for c in s]
+
+    def decode(self, ids: list[int]) -> str:
+        return "".join(self.itos[i] for i in ids)
+
+
+# -------------------------
+# Data loader (random batches)
+# -------------------------
+class TextData:
+    def __init__(self, text: str, tokenizer: CharTokenizer, split: float = 0.9):
+        ids = torch.tensor(tokenizer.encode(text), dtype=torch.long)
+        n = int(split * len(ids))
+        self.train_ids = ids[:n]
+        self.val_ids = ids[n:]
+
+    def get_batch(
+        self, split: str, batch_size: int, block_size: int, device: torch.device
+    ):
+        data = self.train_ids if split == "train" else self.val_ids
+        # random starting indices
+        ix = torch.randint(0, len(data) - block_size - 1, (batch_size,))
+        x = torch.stack([data[i : i + block_size] for i in ix])
+        y = torch.stack([data[i + 1 : i + block_size + 1] for i in ix])
+        return x.to(device), y.to(device)
+
+
+# -------------------------
+# Model: GPT
+# -------------------------
+class CausalSelfAttention(nn.Module):
+    def __init__(self, cfg: GPTConfig):
+        super().__init__()
+        assert cfg.n_embd % cfg.n_head == 0
+        self.n_head = cfg.n_head
+        self.head_dim = cfg.n_embd // cfg.n_head
+
+        self.qkv = nn.Linear(cfg.n_embd, 3 * cfg.n_embd, bias=False)
+        self.proj = nn.Linear(cfg.n_embd, cfg.n_embd, bias=False)
+        self.attn_dropout = nn.Dropout(cfg.dropout)
+        self.resid_dropout = nn.Dropout(cfg.dropout)
+
+        # causal mask (buffer, not a parameter)
+        mask = torch.tril(torch.ones(cfg.block_size, cfg.block_size)).view(
+            1, 1, cfg.block_size, cfg.block_size
+        )
+        self.register_buffer("mask", mask)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        B, T, C = x.shape  # batch, time, channels
+
+        qkv = self.qkv(x)  # (B, T, 3C)
+        q, k, v = qkv.split(C, dim=2)
+
+        # reshape to (B, n_head, T, head_dim)
+        q = q.view(B, T, self.n_head, self.head_dim).transpose(1, 2)
+        k = k.view(B, T, self.n_head, self.head_dim).transpose(1, 2)
+        v = v.view(B, T, self.n_head, self.head_dim).transpose(1, 2)
+
+        # attention scores: (B, n_head, T, T)
+        att = (q @ k.transpose(-2, -1)) / math.sqrt(self.head_dim)
+
+        # apply causal mask
+        att = att.masked_fill(self.mask[:, :, :T, :T] == 0, float("-inf"))
+        att = F.softmax(att, dim=-1)
+        att = self.attn_dropout(att)
+
+        out = att @ v  # (B, n_head, T, head_dim)
+        out = out.transpose(1, 2).contiguous().view(B, T, C)  # (B, T, C)
+
+        out = self.proj(out)
+        out = self.resid_dropout(out)
+        return out
+
+
+class MLP(nn.Module):
+    def __init__(self, cfg: GPTConfig):
+        super().__init__()
+        hidden = 4 * cfg.n_embd
+        self.fc = nn.Linear(cfg.n_embd, hidden)
+        self.proj = nn.Linear(hidden, cfg.n_embd)
+        self.dropout = nn.Dropout(cfg.dropout)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = self.fc(x)
+        x = F.gelu(x)
+        x = self.proj(x)
+        x = self.dropout(x)
+        return x
+
+
+class Block(nn.Module):
+    def __init__(self, cfg: GPTConfig):
+        super().__init__()
+        self.ln1 = nn.LayerNorm(cfg.n_embd)
+        self.attn = CausalSelfAttention(cfg)
+        self.ln2 = nn.LayerNorm(cfg.n_embd)
+        self.mlp = MLP(cfg)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        x = x + self.attn(self.ln1(x))  # pre-LN + residual
+        x = x + self.mlp(self.ln2(x))  # pre-LN + residual
+        return x
+
+
+class GPT(nn.Module):
+    def __init__(self, cfg: GPTConfig, vocab_size: int):
+        super().__init__()
+        self.cfg = cfg
+        self.vocab_size = vocab_size
+
+        self.tok_emb = nn.Embedding(vocab_size, cfg.n_embd)
+        self.pos_emb = nn.Embedding(cfg.block_size, cfg.n_embd)
+        self.drop = nn.Dropout(cfg.dropout)
+
+        self.blocks = nn.ModuleList([Block(cfg) for _ in range(cfg.n_layer)])
+        self.ln_f = nn.LayerNorm(cfg.n_embd)
+
+        # language modeling head
+        self.lm_head = nn.Linear(cfg.n_embd, vocab_size, bias=False)
+
+        # weight tying (common in GPTs)
+        self.lm_head.weight = self.tok_emb.weight
+
+        self.apply(self._init_weights)
+
+    def _init_weights(self, module):
+        if isinstance(module, nn.Linear):
+            nn.init.normal_(module.weight, mean=0.0, std=0.02)
+        elif isinstance(module, nn.Embedding):
+            nn.init.normal_(module.weight, mean=0.0, std=0.02)
+
+    def forward(self, idx: torch.Tensor, targets: torch.Tensor | None = None):
+        B, T = idx.shape
+        assert T <= self.cfg.block_size, "Sequence too long for block_size"
+
+        pos = torch.arange(0, T, device=idx.device).unsqueeze(0)  # (1, T)
+        x = self.tok_emb(idx) + self.pos_emb(pos)
+        x = self.drop(x)
+
+        for block in self.blocks:
+            x = block(x)
+
+        x = self.ln_f(x)
+        logits = self.lm_head(x)  # (B, T, vocab)
+
+        loss = None
+        if targets is not None:
+            # flatten for cross-entropy
+            loss = F.cross_entropy(logits.view(-1, self.vocab_size), targets.view(-1))
+        return logits, loss
+
+    @torch.no_grad()
+    def generate(
+        self,
+        idx: torch.Tensor,
+        max_new_tokens: int,
+        temperature: float = 1.0,
+        top_k: int | None = 50,
+    ):
+        self.eval()
+        for _ in range(max_new_tokens):
+            idx_cond = idx[:, -self.cfg.block_size :]  # crop context
+            logits, _ = self(idx_cond)
+
+            logits = logits[:, -1, :] / max(temperature, 1e-8)  # last step
+
+            if top_k is not None:
+                v, _ = torch.topk(logits, top_k)
+                logits[logits < v[:, [-1]]] = -float("inf")
+
+            probs = F.softmax(logits, dim=-1)
+            next_id = torch.multinomial(probs, num_samples=1)
+            idx = torch.cat((idx, next_id), dim=1)
+        return idx
+
+
+# -------------------------
+# Train / Eval
+# -------------------------
+@torch.no_grad()
+def estimate_loss(model: GPT, data: TextData, cfg: GPTConfig, device: torch.device):
+    model.eval()
+    out = {}
+    for split in ["train", "val"]:
+        losses = torch.zeros(cfg.eval_batches)
+        for i in range(cfg.eval_batches):
+            xb, yb = data.get_batch(split, cfg.batch_size, cfg.block_size, device)
+            _, loss = model(xb, yb)
+            losses[i] = loss.item()
+        out[split] = losses.mean().item()
+    model.train()
+    return out
+
+
+def main():
+    cfg = GPTConfig()
+    set_seed(1337)
+
+    # read dataset
+    with open("data.txt", "r", encoding="utf-8") as f:
+        text = f.read()
+
+    tokenizer = CharTokenizer(text)
+    data = TextData(text, tokenizer)
+
+    device = get_device(cfg)
+    print(f"Device: {device} | vocab_size={tokenizer.vocab_size}")
+
+    model = GPT(cfg, vocab_size=tokenizer.vocab_size).to(device)
+
+    # AdamW optimizer (standard for transformers)
+    optimizer = torch.optim.AdamW(
+        model.parameters(), lr=cfg.learning_rate, weight_decay=cfg.weight_decay
+    )
+
+    t0 = time.time()
+    for step in range(1, cfg.max_steps + 1):
+        xb, yb = data.get_batch("train", cfg.batch_size, cfg.block_size, device)
+
+        logits, loss = model(xb, yb)
+        optimizer.zero_grad(set_to_none=True)
+        loss.backward()
+
+        # gradient clipping helps stability
+        torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.grad_clip)
+        optimizer.step()
+
+        if step % cfg.eval_interval == 0 or step == 1:
+            losses = estimate_loss(model, data, cfg, device)
+            dt = time.time() - t0
+            print(
+                f"step {step:5d} | train {losses['train']:.4f} | val {losses['val']:.4f} | elapsed {dt:.1f}s"
+            )
+
+    # Save checkpoint
+    ckpt = {
+        "model_state": model.state_dict(),
+        "config": cfg.__dict__,
+        "stoi": tokenizer.stoi,
+        "itos": tokenizer.itos,
+    }
+    torch.save(ckpt, "tiny_gpt.pt")
+    print("Saved: tiny_gpt.pt")
+
+    # Demo generation
+    prompt = "Hello"
+    idx = torch.tensor([tokenizer.encode(prompt)], dtype=torch.long, device=device)
+    out = model.generate(idx, max_new_tokens=400, temperature=0.9, top_k=50)[0].tolist()
+    print("\n--- SAMPLE ---")
+    print(tokenizer.decode(out))
+
+
+if __name__ == "__main__":
+    main()
