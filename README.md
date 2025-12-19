@@ -26,7 +26,7 @@ This repo intentionally stays small and readable rather than fast or feature-com
 
 This project targets **Python 3.11+**.
 
-### Option A: `uv` (recommended)
+### Use `uv` (recommended)
 
 ```bash
 cd tiny-gpt
@@ -37,17 +37,6 @@ Run Python through `uv`:
 
 ```bash
 uv run python -c "import torch; print('mps?', torch.backends.mps.is_available())"
-```
-
-### Option B: venv + pip
-
-```bash
-cd tiny-gpt
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -U pip
-pip install torch numpy
-python -c "import torch; print('mps?', torch.backends.mps.is_available())"
 ```
 
 If `mps? True` prints, PyTorch can use your Mac GPU via Metal.
@@ -86,6 +75,19 @@ It should print `arm64` on Apple Silicon.
 
 Training is **character-level**: every unique character in `data.txt` becomes a token in the vocabulary.
 
+### Quick download (Tiny Shakespeare)
+
+Fetch a starter corpus (~1 MB) to `data.txt`:
+
+```bash
+# uv (recommended)
+uv run python dataset.py
+```
+
+Flags: `--force` re-downloads even if `data.txt` exists, `--output` changes the target path, `--url` lets you point at another text source.
+
+### Bring your own text
+
 - **Encoding**: make sure `data.txt` is UTF-8.
 - **Size**: even a few hundred KB works; 1–5 MB is plenty for learning.
 - **Quality matters**: coherent, consistently-formatted text yields much better generations.
@@ -99,9 +101,6 @@ Training is **character-level**: every unique character in `data.txt` becomes a 
 ```bash
 # uv
 uv run python tiny_gpt.py
-
-# or venv/pip
-python tiny_gpt.py
 ```
 
 Output includes:
@@ -120,9 +119,6 @@ After training, run:
 ```bash
 # uv
 uv run python generate.py
-
-# or venv/pip
-python generate.py
 ```
 
 `generate.py` loads:
