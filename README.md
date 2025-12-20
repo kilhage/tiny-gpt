@@ -179,7 +179,7 @@ If you hit MPS memory issues, start by lowering `batch_size` and/or `block_size`
 
 Below are realistic upgrades that keep the project educational, but move it closer to “real GPT”.
 
-See [ROADMAP.md](docs/ROADMAP.md)` for a focused roadmap (tokenization, KV cache, and more).
+See [ROADMAP.md](docs/ROADMAP.md) for a focused roadmap moving towards GPT-4 capabilities.
 
 ### Use PyTorch scaled dot-product attention (cleaner + often faster)
 
