@@ -25,25 +25,36 @@ It is meant to complement—not replace—papers and code.
 
 ---
 
-## One-Minute Mental Model (read this first)
+## The mental model
 
-> **Self-attention is content-addressable memory lookup.**
+> **Self-attention is content-addressable memory lookup over the tokens in the context window.**
 
 - Each token asks: _“Which other tokens are relevant to me right now?”_
 - Attention computes **who to look at** and **how much to copy**.
-- The output is a **mixture of information from other tokens**.
+- The output is a **weighted mix of information from other tokens**.
 
-**Critical invariant:**
+**Invariant (the most important thing):**
 
 > **Attention does not create new information. It only routes and mixes information.**
 > New information is created by the **MLP / feed-forward network**, not attention.
 
-This single invariant explains why Transformers alternate:
+This is why Transformers alternate Attention (mix) and MLP (transform), layer after layer.
 
-- **Attention (mix information)**
-- **MLP (transform information)**
+---
 
-Everything else is engineering.
+## The Transformer loop (keep this in mind)
+
+> **A Transformer repeatedly:**
+>
+> 1. **routes information** across tokens (attention),
+> 2. **transforms information** locally (MLP),
+> 3. **accumulates updates** in a persistent per-token state (residual stream).
+
+Everything else in this document is an explanation of one part of this loop.
+
+> Attention decides **what to look at**,
+> MLP decides **how to change it**,
+> Residuals decide **what persists**.
 
 ---
 
@@ -73,47 +84,39 @@ Since then, progress has focused not on replacing attention, but on making it _p
 
 ---
 
-## What self-attention actually is
+## What self-attention does
 
-### The working-memory view
+Think of the sequence as a shared working memory. Each token produces:
 
-Think of the token sequence as a **shared working memory**.
-
-Each token emits:
-
-- a **Query**: what I’m looking for,
-- a **Key**: what I represent,
-- a **Value**: what information I carry.
+- **Q (Query)**: what I’m looking for
+- **K (Key)**: what I am / what I match on
+- **V (Value)**: what I contain / what can be copied
 
 For each token:
 
-1. Its query is compared to all keys → relevance scores.
-2. Scores are normalized (softmax) → attention weights.
-3. Values are mixed using those weights → new representation.
+1. compare its **Q** against all **K** → relevance scores
+2. normalize scores (softmax) → weights (a distribution over tokens)
+3. take a weighted sum of **V** → a context-aware representation
 
-**Result:**
-Each token becomes a **context-aware blend of other tokens**.
+**Result**: every token becomes a blend of other tokens’ information, based on learned relevance.
 
-This is _content-based_: tokens attend based on meaning, not distance.
+The working memory is read-only during attention; attention can only read and mix values. Only the residual stream can be updated.
 
 ---
 
-## What is learned (this is the key insight)
+## What is learned (why attention works)
 
-The attention algorithm itself is fixed.
+The attention algorithm itself is fixed; the model learns the projection matrices that create Q, K, and V.
 
-What the model learns are the **projection matrices** that produce Q, K, and V.
+That means the model learns:
 
-This means the model learns:
+- what “matching” means (the Q·K similarity space),
+- what content should be copied once a match is found (the V space),
+- which relationships are useful for the task.
 
-- what “matching” means (via Q·K),
-- what information should be copied (via V),
-- which relationships matter.
+> A single attention head is best thought of as a learned **relation detector** plus **content copier**.
 
-> A single attention head is best thought of as
-> **a learned relation detector + a learned copier**.
-
-Heads specialize because they operate in **different learned similarity spaces**.
+Heads specialize because they operate in **different learned similarity spaces**, with specialization emerging naturally during end-to-end training.
 
 ---
 
@@ -121,16 +124,16 @@ Heads specialize because they operate in **different learned similarity spaces**
 
 A single attention head must choose _one_ way to relate tokens.
 
-Language needs many relations simultaneously.
+Language requires many relationships to be considered simultaneously.
 
-Multi-head attention gives you:
+Multi-head attention provides:
 
-- multiple independent match functions,
-- multiple independent copy channels.
-
-Mental picture:
+- multiple independent match functions (Q/K spaces),
+- multiple independent copy channels (V spaces).
 
 > Multi-head attention is like running several different searches over the same sentence in parallel, then combining the evidence.
+
+Heads are not explicitly assigned roles; specialization emerges naturally during end-to-end training.
 
 ---
 
@@ -141,15 +144,15 @@ Attention alone does not know _where_ tokens are.
 Position is injected into the system via:
 
 - absolute or relative positional embeddings,
-- RoPE, ALiBi, or similar schemes.
+- RoPE (Rotary Positional Embedding), ALiBi (Attention with Linear Biases), or similar schemes.
 
-These methods don’t change attention itself; they change **what the queries and keys encode**, allowing distance and order to influence relevance.
+These methods don’t change attention itself; they change **what the queries and keys** (and sometimes values) encode, allowing distance and order to influence relevance.
 
 ---
 
 ## Causal self-attention and the KV-cache mental model
 
-In generative models (GPT-style), attention is **causal**:
+In generative models (GPT-style), attention is causal:
 
 - a token may only attend to earlier tokens (and itself),
 - enforced via a mask.
@@ -162,28 +165,39 @@ In generative models (GPT-style), attention is **causal**:
 At each step:
 
 1. Compute Q for the new token.
-2. Reuse stored K/V for all previous tokens (**KV cache**).
+2. Reuse stored K/V for all previous tokens (the KV cache).
 3. Attend to the past.
 
-This explains most modern optimizations.
+Past keys and values never change, so they can be cached and reused safely.
 
 ---
 
 ## The residual stream: the real “state” of the Transformer
 
-Each token has a vector that flows through the network: the **residual stream**.
+Each token carries a vector that persists through the entire network.
+This vector is the **residual stream** — the true state of the Transformer.
+
+Crucially, layers do not replace this state.
+They only **add small updates to it**.
 
 Each layer performs:
 
-1. **Attention** – mix information into the stream.
-2. **MLP** – transform the stream.
-3. **Residual connection** – add updates, don’t overwrite.
+1. **Attention** – reads from other tokens and proposes an update.
+2. **MLP** – transforms the token’s own features and proposes another update.
+3. **Residual addition** – adds both updates into the existing stream.
 
 Mental picture:
 
 > Each layer writes small edits into a running scratchpad for each token.
+> Nothing is explicitly erased — information is continuously mixed, transformed, reweighted, and sometimes attenuated.
 
-Depth = iterative refinement.
+Depth = iterative refinement:
+early layers write simple, local features;
+later layers build more abstract, global structure on top.
+
+The residual stream is the only thing that flows forward; everything else is just a function that reads from it and writes back into it.
+
+All attention heads and MLPs read from the same residual stream, and their outputs are simply added back into it.
 
 ---
 
@@ -197,15 +211,43 @@ Depth = iterative refinement.
 
 ### Not good at
 
-- creating new features (MLP does that),
-- long-term memory beyond context,
-- exact algorithmic state updates.
+- creating new features (that’s the MLP’s role),
+- maintaining memory beyond the current context,
+- performing exact, discrete algorithmic state updates.
 
 This explains why:
 
 - depth matters,
 - MLPs matter,
 - retrieval/memory systems appear alongside attention.
+
+> Attention is powerful because it is flexible and soft — the same property that makes it weak at exact computation.
+
+---
+
+## Optimizations (same attention, computed differently)
+
+Most “modern attention variants” in practice don’t change the meaning of attention; they change **how it’s computed or stored**:
+
+- FlashAttention / FlashAttention-2: faster exact attention kernels (less memory traffic)
+- MQA/GQA: shrink the KV cache by sharing K/V across heads/groups
+- PagedAttention (vLLM): manage KV cache memory efficiently for serving many requests
+
+Key takeaway:
+
+> Frontier LLMs largely use the same scaled dot-product causal attention—what changes is efficiency, caching, and serving.
+
+---
+
+## The one loop to keep in mind
+
+A Transformer repeatedly:
+
+- Gather relevant information (attention)
+- Transform it (MLP)
+- Accumulate updates (residual stream)
+
+Once that clicks, the Transformer stops feeling mysterious.
 
 ---
 
@@ -346,22 +388,3 @@ Differences are almost entirely about:
 - how position is encoded.
 
 No mainstream model has replaced attention.
-
----
-
-## Final mental model (the one to keep)
-
-If you remember nothing else, remember this loop:
-
-> **Repeat N times:**
->
-> 1. Gather relevant information (attention)
-> 2. Transform it (MLP)
-> 3. Accumulate via residuals
-
-Self-attention is not magic.
-It is **learned information routing** over a shared working memory.
-
-Once that clicks, everything else in Transformer architectures becomes a detail — important, but no longer mysterious.
-
----
