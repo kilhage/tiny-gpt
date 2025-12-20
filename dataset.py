@@ -49,7 +49,13 @@ def download_dataset(
             with urlopen(req, timeout=30) as resp:
                 status = getattr(resp, "status", 200)
                 if status >= 400:
-                    raise HTTPError(url, status, resp.reason, resp.headers, None)
+                    raise HTTPError(
+                        url,
+                        status,
+                        resp.reason,
+                        resp.headers,
+                        None,
+                    )
 
                 with open(tmp_path, "wb") as f:
                     while True:
@@ -84,7 +90,7 @@ def download_dataset(
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Download a text dataset to data.txt " "(Tiny Shakespeare by default)."
+            "Download a text dataset to data.txt (Tiny Shakespeare by default)"
         )
     )
     parser.add_argument(
@@ -113,7 +119,7 @@ def parse_args() -> argparse.Namespace:
         "--backoff",
         type=float,
         default=2.0,
-        help=("Base seconds for exponential backoff " "(sleep = backoff**attempt)."),
+        help="Base seconds for exponential backoff (sleep = backoff**attempt)",
     )
     parser.add_argument(
         "--chunk-size-mb",
