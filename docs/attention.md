@@ -60,27 +60,11 @@ Everything else in this document is an explanation of one part of this loop.
 
 ## Background: why attention exists
 
-Early encoder–decoder RNNs (Recurrent Neural Network) compressed an entire input sequence into a single vector. This created a severe bottleneck: long or information-dense inputs simply didn’t fit.
+Early encoder–decoder RNNs compressed an entire input sequence into a single vector, creating a severe bottleneck: long or information-dense inputs simply didn’t fit.
 
-Attention fixed this by letting the decoder **dynamically look back** at relevant encoder states instead of relying on a single summary vector. Early forms (Bahdanau, Luong) introduced the core abstraction still used today:
+Attention removed this bottleneck by letting the decoder **dynamically look back** at relevant encoder states instead of relying on a single summary. Early forms (Bahdanau, Luong) introduced the core abstraction still used today: compute relevance between a **query and keys**, turn it into **weights**, and use those weights to mix **values**.
 
-- compute relevance scores between a **query** and a set of **keys**,
-- normalize those scores into weights,
-- use the weights to combine **values**.
-
-The Transformer made a decisive leap: instead of “decoder attends to encoder”, **everything attends to everything**.
-In _Attention Is All You Need_ (2017), attention became the **central compute primitive**, enabling:
-
-- parallel processing (no recurrence),
-- global information flow at every layer,
-- clean scaling via repetition.
-
-Two problems immediately emerged:
-
-1. **Position** – attention is order-agnostic.
-2. **Cost** – naïve attention is quadratic in sequence length.
-
-Since then, progress has focused not on replacing attention, but on making it _practical at scale_.
+The Transformer made a decisive leap. Instead of “decoder attends to encoder,” everything attends to everything. In _Attention Is All You Need_ (2017), attention became the central compute primitive, enabling parallel processing, global information flow at every layer, and clean scaling through repetition. This immediately exposed two new constraints—position (attention is order-agnostic) and cost (quadratic in sequence length)—and since then, progress has focused not on replacing attention, but on making it practical at scale.
 
 ---
 
