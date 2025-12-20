@@ -214,7 +214,7 @@ This explains why:
 Most “modern attention variants” in practice don’t change the meaning of attention; they change **how it’s computed or stored**:
 
 - FlashAttention / FlashAttention-2: faster exact attention kernels (less memory traffic)
-- MQA/GQA: shrink the KV cache by sharing K/V across heads/groups
+- MQA (Multi-Query Attention) / GQA (Grouped-Query Attention): shrink the KV cache by sharing K/V across heads/groups
 - PagedAttention (vLLM): manage KV cache memory efficiently for serving many requests
 
 Key takeaway:
