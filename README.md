@@ -118,7 +118,7 @@ After training, run:
 
 ```bash
 # uv
-uv run python generate.py
+uv run python generate.py -p "Hello"
 ```
 
 `generate.py` loads:
@@ -178,20 +178,7 @@ If you hit MPS memory issues, start by lowering `batch_size` and/or `block_size`
 
 Below are realistic upgrades that keep the project educational, but move it closer to “real GPT”.
 
-### Tokenization (move beyond character-level)
-
-- **tiktoken** (fast BPE used by OpenAI-style tokenizers): [openai/tiktoken](https://github.com/openai/tiktoken)
-- **SentencePiece** (BPE/unigram LM, widely used): [google/sentencepiece](https://github.com/google/sentencepiece)
-- **Hugging Face tokenizers** (fast Rust tokenizers): [huggingface/tokenizers](https://github.com/huggingface/tokenizers)
-
-### Faster generation: KV cache
-
-Right now generation recomputes attention over the whole context each step. Adding a **KV cache** makes generation much faster by reusing previous keys/values.
-
-Reference implementations:
-
-- [karpathy/nanoGPT](https://github.com/karpathy/nanoGPT) (clean, educational)
-- [karpathy/minGPT](https://github.com/karpathy/minGPT) (even smaller / teaching-focused)
+See `docs/ROADMAP.md` for a focused roadmap (tokenization, KV cache, and more).
 
 ### Use PyTorch scaled dot-product attention (cleaner + often faster)
 
