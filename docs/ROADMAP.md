@@ -6,7 +6,6 @@ This roadmap assumes:
 
 - progressive scaling (not a single “big bang”)
 - strong emphasis on **reproducibility, evals, and control**
-- eventual deployment in **regulated / enterprise contexts**
 
 ---
 
