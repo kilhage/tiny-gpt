@@ -17,6 +17,7 @@ This repo intentionally stays small and readable rather than fast or feature-com
 
 - **`tiny_gpt.py`**: the whole project in one file (model, data batching, training loop, sampling, checkpoint save).
 - **`generate.py`**: loads `tiny_gpt.pt` and generates text from a prompt.
+- **`dataset.py`**: loads `data.txt` from Tiny Shakespeare.
 - **`data.txt`**: your training corpus (plain UTF-8 text).
 - **`pyproject.toml` / `uv.lock`**: Python deps (works great with `uv`).
 
