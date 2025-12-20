@@ -44,17 +44,17 @@ This is why Transformers alternate Attention (mix) and MLP (transform), layer af
 
 ## The Transformer loop (keep this in mind)
 
-> **A Transformer repeatedly:**
->
-> 1. **routes information** across tokens (attention),
-> 2. **transforms information** locally (MLP),
-> 3. **accumulates updates** in a persistent per-token state (residual stream).
+**A Transformer repeatedly:**
+
+1. **routes information** across tokens (attention),
+2. **transforms information** locally (MLP),
+3. **accumulates updates** in a persistent per-token state (residual stream).
 
 Everything else in this document is an explanation of one part of this loop.
 
-> Attention decides **what to look at**,
-> MLP decides **how to change it**,
-> Residuals decide **what persists**.
+> - Attention decides **what to look at**,
+> - MLP decides **how to change it**,
+> - Residuals decide **what persists**.
 
 ---
 
