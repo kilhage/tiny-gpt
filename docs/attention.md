@@ -1,15 +1,19 @@
 # Transformer Architecture and Self-Attention
 
+_A mental model_
+
+---
+
 ## Purpose & Scope
 
 This document is written as a **conceptual guide to Transformer self-attention**, intended to build a durable mental model rather than provide implementation details or mathematical derivations.
 
 The goal is to:
 
-- understand why attention exists and how it evolved,
-- grasp how self-attention works at a systems level,
-- distinguish core attention mechanisms from engineering optimizations,
-- and connect academic concepts to the architectures used in modern large language models (GPT-4/5, Claude, Gemini, LLaMA, Qwen, etc.).
+- understand **why attention exists** and how it evolved,
+- form an intuitive picture of **what self-attention is actually doing**,
+- distinguish **core attention mechanics** from **engineering optimizations**,
+- and connect research ideas to the architectures used in modern LLMs (GPT-4/5, Claude, Gemini, LLaMA, Qwen, etc.).
 
 This document intentionally prioritizes:
 
@@ -17,21 +21,95 @@ This document intentionally prioritizes:
 - architectural tradeoffs over code,
 - and real-world usage over exhaustive taxonomy.
 
-It is meant to complement—not replace—primary research papers and implementations.
+It is meant to complement—not replace—papers and code.
 
-## Research
+---
 
-- [Understanding Transformers and Modern Attention Mechanisms](https://chatgpt.com/s/dr_6946dd97a00081918e9cbf892d61d0fe)
+## One-Minute Mental Model (read this first)
+
+> **Self-attention is content-addressable memory lookup.**
+
+- Each token asks: _“Which other tokens are relevant to me right now?”_
+- Attention computes **who to look at** and **how much to copy**.
+- The output is a **mixture of information from other tokens**.
+
+**Critical invariant:**
+
+> **Attention does not create new information. It only routes and mixes information.**
+> New information is created by the **MLP / feed-forward network**, not attention.
+
+This single invariant explains why Transformers alternate:
+
+- **Attention (mix information)**
+- **MLP (transform information)**
+
+Everything else is engineering.
+
+---
+
+## Background: why attention exists
+
+Early encoder–decoder RNNs (Recurrent Neural Network) compressed an entire input sequence into a single vector. This created a severe bottleneck: long or information-dense inputs simply didn’t fit.
+
+Attention fixed this by letting the decoder **dynamically look back** at relevant encoder states instead of relying on a single summary vector. Early forms (Bahdanau, Luong) introduced the core abstraction still used today:
+
+- compute relevance scores between a **query** and a set of **keys**,
+- normalize those scores into weights,
+- use the weights to combine **values**.
+
+The Transformer made a decisive leap: instead of “decoder attends to encoder”, **everything attends to everything**.
+In _Attention Is All You Need_ (2017), attention became the **central compute primitive**, enabling:
+
+- parallel processing (no recurrence),
+- global information flow at every layer,
+- clean scaling via repetition.
+
+Two problems immediately emerged:
+
+1. **Position** – attention is order-agnostic.
+2. **Cost** – naïve attention is quadratic in sequence length.
+
+Since then, progress has focused not on replacing attention, but on making it _practical at scale_.
+
+---
+
+## What self-attention actually is
+
+### The working-memory view
+
+Think of the token sequence as a **shared working memory**.
+
+Each token emits:
+
+- a **Query**: what I’m looking for,
+- a **Key**: what I represent,
+- a **Value**: what information I carry.
+
+For each token:
+
+1. Its query is compared to all keys → relevance scores.
+2. Scores are normalized (softmax) → attention weights.
+3. Values are mixed using those weights → new representation.
+
+**Result:**
+Each token becomes a **context-aware blend of other tokens**.
+
+This is _content-based_: tokens attend based on meaning, not distance.
+
+---
 
 ## Background
 
 Attention began as a practical solution to a bottleneck in early neural sequence-to-sequence models: classic encoder–decoder RNNs had to compress an entire input (like a source sentence) into a single fixed-size vector, which degraded badly on long or information-dense sequences. The breakthrough was to let the decoder **dynamically “look back”** at the encoder’s hidden states at each generation step via a learned soft alignment. This idea first crystallized in **additive attention** (Bahdanau et al., 2015) and was soon streamlined into **dot-product / multiplicative attention** (Luong et al., 2015), which made the same core concept more hardware-friendly. In today’s language, these works established the key abstraction: compute relevance scores between a **query** and a set of **keys**, turn scores into weights (softmax), and use those weights to mix **values** into a context vector.
+
 Papers: Bahdanau et al. ([https://arxiv.org/abs/1409.0473](https://arxiv.org/abs/1409.0473)), Luong et al. ([https://arxiv.org/abs/1508.04025](https://arxiv.org/abs/1508.04025))
 
 The Transformer reframed attention from “decoder attending to encoder” into **self-attention**, where each token in a sequence can attend to other tokens in the same sequence. In **Attention Is All You Need** (Vaswani et al., 2017), attention became the central compute primitive: **scaled dot-product attention** plus **multi-head attention** enabled parallel training (no recurrence), richer feature mixing (different heads can specialize), and a clean repeated building block that scaled well. Once this worked, the next wave of innovation focused on two pressure points: (1) **position**, because attention alone is order-agnostic (leading to relative position methods and later RoPE/ALiBi-style schemes), and (2) **cost**, because naïve attention is quadratic in sequence length.
+
 Papers: Vaswani et al. ([https://arxiv.org/abs/1706.03762](https://arxiv.org/abs/1706.03762)), Shaw et al. relative positions ([https://arxiv.org/abs/1803.02155](https://arxiv.org/abs/1803.02155)), RoPE ([https://arxiv.org/abs/2104.09864](https://arxiv.org/abs/2104.09864)), ALiBi ([https://arxiv.org/abs/2108.12409](https://arxiv.org/abs/2108.12409))
 
 From ~2020 onward, the story splits into two tracks: research into **sparse/approximate attention** (Longformer, BigBird, Linformer, Performer, Reformer) to reduce the O(n²) wall for very long sequences, and—arguably more impactful for frontier LLMs—**engineering that keeps attention exact but makes it fast and memory-efficient**. Architectural tweaks like **Multi-Query Attention** reduce KV-cache overhead during generation; kernel-level advances like **FlashAttention / FlashAttention-2** make the same attention computation dramatically more IO-efficient on GPUs; and serving-time systems like **PagedAttention** manage KV cache memory to sustain long contexts and high concurrency. The net result is that modern LLMs still rely on the Transformer’s scaled dot-product attention at the core—but differentiate by _how efficiently they compute it_, _how they represent position_, and _how they make long context practical in training and serving_.
+
 Papers: Longformer ([https://arxiv.org/abs/2004.05150](https://arxiv.org/abs/2004.05150)), BigBird ([https://arxiv.org/abs/2007.14062](https://arxiv.org/abs/2007.14062)), Linformer ([https://arxiv.org/abs/2006.04768](https://arxiv.org/abs/2006.04768)), Performer ([https://arxiv.org/abs/2009.14794](https://arxiv.org/abs/2009.14794)), Reformer ([https://arxiv.org/abs/2001.04451](https://arxiv.org/abs/2001.04451)), MQA ([https://arxiv.org/abs/1911.02150](https://arxiv.org/abs/1911.02150)), FlashAttention ([https://arxiv.org/abs/2205.14135](https://arxiv.org/abs/2205.14135)), FlashAttention-2 ([https://arxiv.org/abs/2307.08691](https://arxiv.org/abs/2307.08691)), PagedAttention/vLLM ([https://arxiv.org/abs/2309.06180](https://arxiv.org/abs/2309.06180))
 
 ## High-Level Overview
@@ -43,6 +121,37 @@ The core idea is simple: every token is projected into three vectors—**Query (
 Transformers apply this mechanism **in parallel for every token**, which is why it’s called self-attention. In practice, this happens across multiple **attention heads**. Each head learns a different way to compare queries and keys, allowing the model to attend to different patterns at the same time—such as syntax, long-range dependencies, or semantic similarity. The outputs of all heads are concatenated and mixed, giving the model a richer, more expressive representation than a single attention computation could provide. To make this work for ordered data like text, positional information (via positional embeddings or RoPE/ALiBi-style methods) is injected so attention can distinguish between “nearby” and “far away” tokens.
 
 In **causal self-attention**, used by generative language models like GPT, an additional constraint is applied: each token is only allowed to attend to earlier tokens (and itself). This prevents the model from “seeing the future” during training or generation and ensures the model learns to predict the next token autoregressively. Aside from this masking, the mechanism is the same. A Transformer block then stacks this self-attention layer with a feed-forward network, residual connections, and normalization. Repeating this block many times allows information to be refined layer by layer—from local patterns in early layers to more abstract reasoning in later ones. At scale, this simple idea—repeated content-based mixing via self-attention—is what powers modern LLMs.
+
+## Mental model in one minute
+
+Self-attention is a _content-addressable read_ from a small “working memory” of tokens.
+
+- Each token emits a **query** (what I need), and every token exposes a **key** (what I am) and **value** (what I can contribute).
+- Attention computes: _for this token, which other tokens match what I’m looking for?_
+- The output is a **mixture of values** — i.e., the token “pulls in” information from the most relevant tokens.
+
+Then add the key invariant:
+
+**Invariant**: Self-attention cannot create new information; it only **routes/mixes** information already present in the values. The **MLP/FFN** is the part that _creates_ new features (per token).
+This single invariant explains why Transformers alternate **Attention (mix)** and **MLP (transform)**.
+
+## What is learned in self-attention?
+
+- The model learns the projection matrices that produce Q/K/V from token representations.
+- This means the model learns **what “matching” means** (via Q·K) and **what content should be copied** (via V).
+- Heads specialize because different projection matrices define different similarity spaces.
+
+Useful intuition:
+
+> A head is a learned “relation detector” + “content copier”.
+
+Examples of relations (not claims, just intuitions):
+
+- “this pronoun refers to that noun”
+- “this verb attaches to that subject”
+- “this line of code depends on that variable definition”
+
+This helps because most confusion comes from thinking attention is a fixed algorithm. It’s not; the algorithm is fixed, but the spaces are learned.
 
 ## Attention Variants & Optimizations
 
@@ -83,3 +192,175 @@ Most state-of-the-art language models—including OpenAI’s GPT-4/5, Anthropic�
 
 **Bottom line:**  
 All major LLMs use scaled dot-product attention as the foundation, with mask-based causality for generation. They differentiate via engineering—faster kernels (FlashAttention), memory-efficient KV management (Paged/PagedAttention), more efficient head arrangements (MQA/GQA), smarter positional encodings, and context window scaling—rather than radical changes to attention itself. Mastering Transformer attention plus these enhancements covers >95% of what powers today’s top LLMs.
+
+Below is a **rewritten version of your document** that incorporates the improvements and is explicitly structured to **build and reinforce a mental model**.
+Nothing fundamentally new is added; instead, the same ideas are reorganized around **invariants, internal pictures, and flow**, so your brain has something stable to “run”.
+
+You should be able to read this top-to-bottom and then _simulate_ what a Transformer layer is doing.
+
+---
+
+## What is learned (this is the key insight)
+
+The attention algorithm itself is fixed.
+
+What the model learns are the **projection matrices** that produce Q, K, and V.
+
+This means the model learns:
+
+- what “matching” means (via Q·K),
+- what information should be copied (via V),
+- which relationships matter.
+
+> A single attention head is best thought of as
+> **a learned relation detector + a learned copier**.
+
+Heads specialize because they operate in **different learned similarity spaces**.
+
+---
+
+## Why multi-head attention exists
+
+A single attention head must choose _one_ way to relate tokens.
+
+Language needs many relations simultaneously.
+
+Multi-head attention gives you:
+
+- multiple independent match functions,
+- multiple independent copy channels.
+
+Mental picture:
+
+> Multi-head attention is like running several different searches over the same sentence in parallel, then combining the evidence.
+
+---
+
+## Position: attention needs order injected
+
+Attention alone does not know _where_ tokens are.
+
+Position is injected into the system via:
+
+- absolute or relative positional embeddings,
+- RoPE, ALiBi, or similar schemes.
+
+These methods don’t change attention itself; they change **what the queries and keys encode**, allowing distance and order to influence relevance.
+
+---
+
+## Causal self-attention and the KV-cache mental model
+
+In generative models (GPT-style), attention is **causal**:
+
+- a token may only attend to earlier tokens (and itself),
+- enforced via a mask.
+
+### Autoregressive generation mental model
+
+- During training: all tokens attend in parallel (with masking).
+- During inference: generation is **append-only**.
+
+At each step:
+
+1. Compute Q for the new token.
+2. Reuse stored K/V for all previous tokens (**KV cache**).
+3. Attend to the past.
+
+This explains most modern optimizations.
+
+---
+
+## The residual stream: the real “state” of the Transformer
+
+Each token has a vector that flows through the network: the **residual stream**.
+
+Each layer performs:
+
+1. **Attention** – mix information into the stream.
+2. **MLP** – transform the stream.
+3. **Residual connection** – add updates, don’t overwrite.
+
+Mental picture:
+
+> Each layer writes small edits into a running scratchpad for each token.
+
+Depth = iterative refinement.
+
+---
+
+## What attention is good at (and not)
+
+### Good at
+
+- routing information across tokens,
+- copying relevant context,
+- resolving relationships (coreference, dependency).
+
+### Not good at
+
+- creating new features (MLP does that),
+- long-term memory beyond context,
+- exact algorithmic state updates.
+
+This explains why:
+
+- depth matters,
+- MLPs matter,
+- retrieval/memory systems appear alongside attention.
+
+---
+
+## Attention variants & optimizations (reframed)
+
+These do **not** change what attention means — only _how it is computed or stored_.
+
+| Category          | What changes       | Why it exists                   |
+| ----------------- | ------------------ | ------------------------------- |
+| Standard SDPA     | Core algorithm     | The foundation                  |
+| FlashAttention    | Kernel execution   | Make exact attention fast       |
+| FlashAttention-2  | Better parallelism | Use modern GPUs efficiently     |
+| Multi-Query / GQA | Head structure     | Reduce KV cache size            |
+| PagedAttention    | Memory management  | Serve long contexts efficiently |
+
+Key takeaway:
+
+> Modern LLMs still use the same attention — they just compute it _far more efficiently_.
+
+---
+
+## Attention in major LLMs (mental model view)
+
+All frontier models:
+
+- use **scaled dot-product attention**,
+- apply **causal masking** for generation,
+- rely on **engineering** to scale context and throughput.
+
+Differences are almost entirely about:
+
+- how Q/K/V are shared (MQA/GQA),
+- how attention is computed (FlashAttention),
+- how memory is managed (paging),
+- how position is encoded.
+
+No mainstream model has replaced attention.
+
+---
+
+## Final mental model (the one to keep)
+
+If you remember nothing else, remember this loop:
+
+> **Repeat N times:**
+>
+> 1. Gather relevant information (attention)
+> 2. Transform it (MLP)
+> 3. Accumulate via residuals
+
+Self-attention is not magic.
+It is **learned information routing** over a shared working memory.
+
+Once that clicks, everything else in Transformer architectures becomes a detail — important, but no longer mysterious.
+
+---
