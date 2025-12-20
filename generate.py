@@ -1,11 +1,21 @@
+import argparse
+
 import torch
-import torch.nn.functional as F
 
 # must match tiny_gpt.py class names, so simplest is: import them
 from tiny_gpt import GPT, CharTokenizer, GPTConfig
 
 
 def main():
+    parser = argparse.ArgumentParser(description="Generate text with tiny GPT.")
+    parser.add_argument(
+        "-p",
+        "--prompt",
+        default="Once upon a time",
+        help="Starting prompt used for generation.",
+    )
+    args = parser.parse_args()
+
     device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
 
     ckpt = torch.load("tiny_gpt.pt", map_location=device)
@@ -20,7 +30,7 @@ def main():
     model.load_state_dict(ckpt["model_state"])
     model.eval()
 
-    prompt = "Once upon a time"
+    prompt = args.prompt
     idx = torch.tensor([tokenizer.encode(prompt)], dtype=torch.long, device=device)
     out = model.generate(idx, max_new_tokens=400, temperature=0.9, top_k=50)[0].tolist()
     print(tokenizer.decode(out))
