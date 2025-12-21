@@ -125,12 +125,18 @@ Heads are not explicitly assigned roles; specialization emerges naturally during
 
 Attention alone does not know _where_ tokens are.
 
-Position is injected into the system via:
+Position is injected by modifying how **queries and keys represent distance and order**, using schemes such as:
 
-- absolute or relative positional embeddings,
-- RoPE (Rotary Positional Embedding), ALiBi (Attention with Linear Biases), or similar schemes.
+- **Absolute or relative positional embeddings**
+  Add explicit position vectors to token representations.
 
-These methods don’t change attention itself; they change **what the queries and keys** (and sometimes values) encode, allowing distance and order to influence relevance.
+- **RoPE (Rotary Positional Embedding)**
+  Rotates query and key vectors by position, so their dot product reflects relative distance and order, enabling better long-context extrapolation.
+
+- **ALiBi (Attention with Linear Biases)**
+  Adds a **distance-dependent bias directly to attention scores**, favoring nearby tokens with minimal overhead.
+
+These methods don’t change attention itself; they change **how relevance is computed**, allowing order and distance to influence which tokens are attended to.
 
 ---
 
