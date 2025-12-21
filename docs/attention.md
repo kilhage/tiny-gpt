@@ -226,9 +226,9 @@ These optimizations compute **exact scaled dot-product attention**, but reorgani
   Fused kernels that tile Q/K/V, avoiding materializing the full attention matrix.
   Same outputs, dramatically less memory IO.
 
-**What changes:** kernel implementation
-**What stays the same:** attention math and model behavior
-**Why it matters:** training and inference speed
+**What changes:** kernel implementation.
+**What stays the same:** attention math and model behavior.
+**Why it matters:** training and inference speed.
 
 > This is the baseline for frontier models on supported GPUs.
 
@@ -242,9 +242,9 @@ At inference time, memory bandwidth and KV cache size dominate cost.
 - **GQA (Grouped-Query Attention)** – several Q heads share each K/V head
 - **KV cache quantization / compression** – store K/V in lower precision
 
-**What changes:** how keys/values are represented and stored
-**What stays the same:** causal attention semantics
-**Why it matters:** tokens/sec, max context length, deployability
+**What changes:** how keys/values are represented and stored.
+**What stays the same:** causal attention semantics.
+**Why it matters:** tokens/sec, max context length, deployability.
 
 > GQA is the _current sweet spot_ for most LLMs. MQA is the extreme case.
 
@@ -257,9 +257,9 @@ These optimizations don’t change the model at all — they change **how KV mem
 - **PagedAttention (vLLM)**
   Treats KV cache like virtual memory, enabling efficient batching and very long contexts across many requests.
 
-**What changes:** memory allocation strategy
-**What stays the same:** model architecture and attention math
-**Why it matters:** serving many users, long prompts
+**What changes:** memory allocation strategy.
+**What stays the same:** model architecture and attention math.
+**Why it matters:** serving many users, long prompts.
 
 ---
 
@@ -270,9 +270,9 @@ Instead of attending to _all_ tokens, restrict attention to structured subsets.
 - **Sliding-window / local attention** – attend to nearby tokens only
 - **Block-sparse / hybrid patterns** – local attention + a few global tokens
 
-**What changes:** which tokens can attend to which
-**What stays the same:** attention computation within allowed regions
-**Why it matters:** long contexts without O(T²) cost
+**What changes:** which tokens can attend to which.
+**What stays the same:** attention computation within allowed regions.
+**Why it matters:** long contexts without O(T²) cost.
 
 > This introduces inductive bias, but works well for very long sequences.
 
@@ -285,9 +285,9 @@ These approaches reduce attention cost by compressing K/V into a smaller latent 
 - **Multi-Head Latent Attention (MLA)** (e.g. DeepSeek)
   Queries attend to a learned latent representation instead of raw K/V tokens.
 
-**What changes:** representation of keys/values
-**What stays the same:** attention as a routing mechanism
-**Why it matters:** further memory/bandwidth reduction beyond GQA
+**What changes:** representation of keys/values.
+**What stays the same:** attention as a routing mechanism.
+**Why it matters:** further memory/bandwidth reduction beyond GQA.
 
 > This is one of the most promising “beyond GQA” directions.
 
@@ -300,8 +300,8 @@ These methods alter the attention computation itself.
 - Kernelized / linear attention
 - Low-rank or landmark approximations
 
-**What changes:** attention math
-**Tradeoff:** efficiency vs. quality and stability
+**What changes:** attention math.
+**Tradeoff:** efficiency vs. quality and stability.
 
 > Less common in production LLMs today.
 
