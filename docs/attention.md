@@ -278,32 +278,18 @@ Instead of attending to _all_ tokens, restrict attention to structured subsets.
 
 ---
 
-### 5. Latent or compressed attention representations (frontier ideas)
+### 5. Latent or compressed attention representations
 
-These approaches reduce attention cost by compressing K/V into a smaller latent space.
+These approaches reduce attention cost by replacing per-token K/V with a small, learned latent memory.
 
-- **Multi-Head Latent Attention (MLA)** (e.g. DeepSeek)
-  Queries attend to a learned latent representation instead of raw K/V tokens.
+- **Multi-Head Latent Attention (MLA)** (e.g. DeepSeek)  
+  Tokens write into a fixed-size set of latent vectors, and queries attend to these latents instead of all past tokens.
 
-**What changes:** representation of keys/values.
-**What stays the same:** attention as a routing mechanism.
-**Why it matters:** further memory/bandwidth reduction beyond GQA.
+**What changes:** keys/values are stored in a fixed-size latent memory, not per-token K/V.  
+**What stays the same:** scaled dot-product attention as a routing mechanism.  
+**Why it matters:** KV memory no longer grows with sequence length, enabling longer contexts and lower bandwidth than GQA/MQA.
 
-> This is one of the most promising “beyond GQA” directions.
-
----
-
-### 6. Approximate or linearized attention (research-heavy)
-
-These methods alter the attention computation itself.
-
-- Kernelized / linear attention
-- Low-rank or landmark approximations
-
-**What changes:** attention math.
-**Tradeoff:** efficiency vs. quality and stability.
-
-> Less common in production LLMs today.
+> MLA is a leading “beyond GQA” approach for reducing KV-cache cost at frontier scale.
 
 ---
 
