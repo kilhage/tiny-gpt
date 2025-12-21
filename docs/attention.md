@@ -209,13 +209,103 @@ This explains why:
 
 ---
 
-## Optimizations (same attention, computed differently)
+## Optimizations: making attention scale
 
-Most “modern attention variants” in practice don’t change the meaning of attention; they change **how it’s computed or stored**:
+Most “modern attention variants” do **not** change what attention _means_.
+They change **how attention is computed, stored, or constrained** to make it viable at scale.
 
-- FlashAttention / FlashAttention-2: faster exact attention kernels (less memory traffic)
-- MQA (Multi-Query Attention) / GQA (Grouped-Query Attention): shrink the KV cache by sharing K/V across heads/groups
-- PagedAttention (vLLM): manage KV cache memory efficiently for serving many requests
+It’s useful to think of optimizations as belonging to a few distinct families.
+
+---
+
+### 1. Faster exact attention (same math, better kernels)
+
+These optimizations compute **exact scaled dot-product attention**, but reorganize computation to reduce memory traffic and improve hardware utilization.
+
+- **FlashAttention / FlashAttention-2**
+  Fused kernels that tile Q/K/V, avoiding materializing the full attention matrix.
+  Same outputs, dramatically less memory IO.
+
+**What changes:** kernel implementation
+**What stays the same:** attention math and model behavior
+**Why it matters:** training and inference speed
+
+> This is the baseline for frontier models on supported GPUs.
+
+---
+
+### 2. KV-cache reduction (same attention, smaller memory footprint)
+
+At inference time, memory bandwidth and KV cache size dominate cost.
+
+- **MQA (Multi-Query Attention)** – all Q heads share a single K/V head
+- **GQA (Grouped-Query Attention)** – several Q heads share each K/V head
+- **KV cache quantization / compression** – store K/V in lower precision
+
+**What changes:** how keys/values are represented and stored
+**What stays the same:** causal attention semantics
+**Why it matters:** tokens/sec, max context length, deployability
+
+> GQA is the _current sweet spot_ for most LLMs. MQA is the extreme case.
+
+---
+
+### 3. KV-cache management (systems-level scaling)
+
+These optimizations don’t change the model at all — they change **how KV memory is allocated and reused**.
+
+- **PagedAttention (vLLM)**
+  Treats KV cache like virtual memory, enabling efficient batching and very long contexts across many requests.
+
+**What changes:** memory allocation strategy
+**What stays the same:** model architecture and attention math
+**Why it matters:** serving many users, long prompts
+
+---
+
+### 4. Structured sparsity (reduce attention scope)
+
+Instead of attending to _all_ tokens, restrict attention to structured subsets.
+
+- **Sliding-window / local attention** – attend to nearby tokens only
+- **Block-sparse / hybrid patterns** – local attention + a few global tokens
+
+**What changes:** which tokens can attend to which
+**What stays the same:** attention computation within allowed regions
+**Why it matters:** long contexts without O(T²) cost
+
+> This introduces inductive bias, but works well for very long sequences.
+
+---
+
+### 5. Latent or compressed attention representations (frontier ideas)
+
+These approaches reduce attention cost by compressing K/V into a smaller latent space.
+
+- **Multi-Head Latent Attention (MLA)** (e.g. DeepSeek)
+  Queries attend to a learned latent representation instead of raw K/V tokens.
+
+**What changes:** representation of keys/values
+**What stays the same:** attention as a routing mechanism
+**Why it matters:** further memory/bandwidth reduction beyond GQA
+
+> This is one of the most promising “beyond GQA” directions.
+
+---
+
+### 6. Approximate or linearized attention (research-heavy)
+
+These methods alter the attention computation itself.
+
+- Kernelized / linear attention
+- Low-rank or landmark approximations
+
+**What changes:** attention math
+**Tradeoff:** efficiency vs. quality and stability
+
+> Less common in production LLMs today.
+
+---
 
 Key takeaway:
 
