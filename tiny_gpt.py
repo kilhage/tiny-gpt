@@ -18,7 +18,14 @@ class GPTConfig:
     block_size: int = 256  # context length
     # model
     n_layer: int = 6
-    n_head: int = 6
+
+    # normal multi-head attention
+    n_head: int = 8
+
+    # GQA
+    n_q_head: int = 8
+    n_kv_head: int = 4
+
     n_embd: int = 384
     dropout: float = 0.1
     # training
@@ -28,6 +35,7 @@ class GPTConfig:
     learning_rate: float = 3e-4
     weight_decay: float = 0.1
     grad_clip: float = 1.0
+
     # runtime
     device: str = "auto"  # "auto" | "mps" | "cpu"
 
@@ -79,7 +87,11 @@ class TextData:
         self.val_ids = ids[n:]
 
     def get_batch(
-        self, split: str, batch_size: int, block_size: int, device: torch.device
+        self,
+        split: str,
+        batch_size: int,
+        block_size: int,
+        device: torch.device,
     ):
         data = self.train_ids if split == "train" else self.val_ids
         # random starting indices
@@ -90,53 +102,244 @@ class TextData:
 
 
 # -------------------------
-# Model: GPT
+# Grouped-Query Attention (GQA)
 # -------------------------
-class CausalSelfAttention(nn.Module):
+class GroupedQueryAttention(nn.Module):
+    """
+    Grouped-Query Attention (GQA).
+
+    - n_q_head: number of query heads (like normal multi-head attention)
+    - n_kv_head: number of key/value heads (smaller than n_q_head)
+    - Each KV head is shared across (n_q_head / n_kv_head) Q heads.
+
+    Input:  x (B, T, C)
+    Output: y (B, T, C)
+    """
+
+    def __init__(
+        self,
+        cfg: GPTConfig,
+    ):
+        super().__init__()
+        assert cfg.n_embd % cfg.n_q_head == 0, "n_embd must be divisible by n_q_head"
+        assert (
+            cfg.n_q_head % cfg.n_kv_head == 0
+        ), "n_q_head must be divisible by n_kv_head"
+
+        self.n_embd = cfg.n_embd
+        self.n_q_head = cfg.n_q_head
+        self.n_kv_head = cfg.n_kv_head
+        self.head_dim = cfg.n_embd // cfg.n_q_head
+        self.attn_dropout = cfg.dropout
+        self.block_size = cfg.block_size
+        self.group_size = self.n_q_head // self.n_kv_head
+
+        # Output widths for fused projection
+        self.q_out = cfg.n_q_head * self.head_dim
+        self.kv_out = cfg.n_kv_head * self.head_dim
+
+        assert self.q_out == self.n_embd
+        assert self.kv_out == self.n_kv_head * self.head_dim
+
+        # One projection for Q,K,V:
+        # (B,T,C) -> (B,T, q_out + kv_out + kv_out)
+        self.qkv_proj = nn.Linear(self.n_embd, self.q_out + 2 * self.kv_out, bias=False)
+
+        # Final projection back to model dimension
+        self.out_proj = nn.Linear(self.n_embd, self.n_embd, bias=False)
+        self.resid_dropout = nn.Dropout(cfg.dropout)
+
+    def _split_heads(self, x: torch.Tensor, n_head: int) -> torch.Tensor:
+        """(B,T,n_head*head_dim) -> (B,n_head,T,head_dim)"""
+        B, T, _ = x.shape
+        return x.view(B, T, n_head, self.head_dim).transpose(1, 2)
+
+    def _expand_kv(self, kv: torch.Tensor) -> torch.Tensor:
+        """
+        Expand KV heads to match Q heads without materializing repeats.
+        kv: (B, n_kv, T, d) -> (B, n_q, T, d)
+        """
+        B, n_kv, T, d = kv.shape
+        assert n_kv == self.n_kv_head
+        assert d == self.head_dim
+
+        kv = kv[:, :, None, :, :]  # (B, n_kv, 1, T, d)
+        kv = kv.expand(B, n_kv, self.group_size, T, d)  # (B, n_kv, group, T, d) view
+        return kv.reshape(B, n_kv * self.group_size, T, d)  # (B, n_q, T, d)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        B, T, C = x.shape
+
+        assert C == self.n_embd, "Expected embedding dimension to match config."
+        assert T <= self.block_size, "Sequence length exceeds configured block size."
+
+        # Fused projection then split into Q, K, V
+        qkv = self.qkv_proj(x)
+        q, k, v = qkv.split([self.q_out, self.kv_out, self.kv_out], dim=-1)
+
+        # Split into heads
+        q = self._split_heads(q, self.n_q_head)  # (B, n_q,  T, d)
+        k = self._split_heads(k, self.n_kv_head)  # (B, n_kv, T, d)
+        v = self._split_heads(v, self.n_kv_head)  # (B, n_kv, T, d)
+
+        # Expand K/V from n_kv_head -> n_q_head by repeating groups
+        k = self._expand_kv(k)
+        v = self._expand_kv(v)
+
+        # Use fused SDPA (FlashAttention kernels on supported GPUs)
+        y = F.scaled_dot_product_attention(
+            q,
+            k,
+            v,
+            attn_mask=None,
+            dropout_p=self.attn_dropout if self.training else 0.0,
+            is_causal=True,
+        )  # (B, SDPA returns (B,n_q,T,d))
+
+        # Merge heads back: (B,T,C)
+        y = y.transpose(1, 2).contiguous().view(B, T, C)
+        y = self.out_proj(y)
+        y = self.resid_dropout(y)
+        return y
+
+
+# -------------------------
+# Causal self-attention using PyTorch SDPA
+# -------------------------
+class CausalSelfAttentionSDPA(nn.Module):
+    """
+    Multi-head causal self-attention using PyTorch SDPA.
+    PyTorch will dispatch to FlashAttention/mem-efficient kernels when available.
+
+    Input:  x (B, T, C)
+    Output: y (B, T, C)
+    """
+
     def __init__(self, cfg: GPTConfig):
         super().__init__()
         assert cfg.n_embd % cfg.n_head == 0
         self.n_head = cfg.n_head
         self.head_dim = cfg.n_embd // cfg.n_head
+        self.dropout = cfg.dropout
 
         self.qkv = nn.Linear(cfg.n_embd, 3 * cfg.n_embd, bias=False)
         self.proj = nn.Linear(cfg.n_embd, cfg.n_embd, bias=False)
-        self.attn_dropout = nn.Dropout(cfg.dropout)
         self.resid_dropout = nn.Dropout(cfg.dropout)
 
-        # causal mask (buffer, not a parameter)
-        mask = torch.tril(torch.ones(cfg.block_size, cfg.block_size)).view(
-            1, 1, cfg.block_size, cfg.block_size
-        )
-        self.register_buffer("mask", mask)
+    def _split_heads(self, x: torch.Tensor) -> torch.Tensor:
+        # (B, T, C) -> (B, n_head, T, head_dim)
+        B, T, C = x.shape
+        return x.reshape(B, T, self.n_head, self.head_dim).transpose(1, 2)
+
+    def _merge_heads(self, x: torch.Tensor) -> torch.Tensor:
+        # (B, n_head, T, head_dim) -> (B, T, C)
+        B, nh, T, hd = x.shape
+        return x.transpose(1, 2).contiguous().reshape(B, T, nh * hd)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        B, T, C = x.shape
+
+        q, k, v = self.qkv(x).chunk(3, dim=-1)
+        q = self._split_heads(q)
+        k = self._split_heads(k)
+        v = self._split_heads(v)
+
+        # SDPA includes scaling, masking (if is_causal=True), softmax, and dropout.
+        y = F.scaled_dot_product_attention(
+            q,
+            k,
+            v,
+            attn_mask=None,
+            dropout_p=self.dropout if self.training else 0.0,
+            is_causal=True,
+        )
+
+        y = self._merge_heads(y)
+        y = self.proj(y)
+        y = self.resid_dropout(y)
+        return y
+
+
+# -------------------------
+# Causal self-attention
+# -------------------------
+class CausalSelfAttention(nn.Module):
+    """
+    Multi-head causal self-attention.
+
+    Input:  x (B, T, C)
+    Output: y (B, T, C)
+
+    Causal = token t may only attend to tokens <= t.
+    """
+
+    def __init__(self, cfg: GPTConfig):
+        super().__init__()
+        assert cfg.n_embd % cfg.n_head == 0
+        self.n_head = cfg.n_head  # number of heads
+        self.head_dim = cfg.n_embd // cfg.n_head  # dimension of each head
+        self.dropout = cfg.dropout
+        self.block_size = cfg.block_size
+
+        # One projection for Q,K,V for efficiency: (B,T,C) -> (B,T,3C)
+        self.qkv = nn.Linear(cfg.n_embd, 3 * cfg.n_embd, bias=False)
+
+        # Final projection back to model dimension
+        self.proj = nn.Linear(cfg.n_embd, cfg.n_embd, bias=False)
+
+        # dropout for the attention weights
+        self.attn_dropout = nn.Dropout(self.dropout)
+
+        # dropout for the residual connections
+        self.resid_dropout = nn.Dropout(self.dropout)
+
+        # Boolean causal mask: True = allowed, False = masked out
+        mask = torch.tril(torch.ones(cfg.block_size, cfg.block_size, dtype=torch.bool))
+        self.register_buffer("mask", mask.view(1, 1, cfg.block_size, cfg.block_size))
+
+    def _split_heads(self, x: torch.Tensor) -> torch.Tensor:
+        """Split the channels (C) into multiple heads."""
+        # (B,T,C) -> (B,n_head,T,head_dim)
+        B, T, C = x.shape
+        return x.view(B, T, self.n_head, self.head_dim).transpose(1, 2)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """Forward pass for causal self-attention."""
         B, T, C = x.shape  # batch, time, channels
+        assert T <= self.block_size, "Sequence length exceeds configured block size."
 
-        qkv = self.qkv(x)  # (B, T, 3C)
-        q, k, v = qkv.split(C, dim=2)
+        # Project once, then split
+        q, k, v = self.qkv(x).chunk(3, dim=-1)
 
-        # reshape to (B, n_head, T, head_dim)
-        q = q.view(B, T, self.n_head, self.head_dim).transpose(1, 2)
-        k = k.view(B, T, self.n_head, self.head_dim).transpose(1, 2)
-        v = v.view(B, T, self.n_head, self.head_dim).transpose(1, 2)
+        q = self._split_heads(q)
+        k = self._split_heads(k)
+        v = self._split_heads(v)
 
-        # attention scores: (B, n_head, T, T)
-        att = (q @ k.transpose(-2, -1)) / math.sqrt(self.head_dim)
+        # Scaled dot-product attention scores: (B,n_head,T,T)
+        scale = 1.0 / math.sqrt(self.head_dim)
+        att = (q @ k.transpose(-2, -1)) * scale
 
-        # apply causal mask
-        att = att.masked_fill(self.mask[:, :, :T, :T] == 0, float("-inf"))
+        # Mask future tokens (disallow attending to positions > t)
+        att = att.masked_fill(~self.mask[:, :, :T, :T], torch.finfo(att.dtype).min)
+
+        # Softmax -> dropout -> weighted sum
         att = F.softmax(att, dim=-1)
         att = self.attn_dropout(att)
 
-        out = att @ v  # (B, n_head, T, head_dim)
-        out = out.transpose(1, 2).contiguous().view(B, T, C)  # (B, T, C)
+        y = att @ v  # (B,n_head,T,head_dim)
 
-        out = self.proj(out)
-        out = self.resid_dropout(out)
-        return out
+        # Merge heads: (B,T,C)
+        y = y.transpose(1, 2).contiguous().view(B, T, C)
+
+        # Output projection + residual dropout
+        y = self.proj(y)
+        y = self.resid_dropout(y)
+        return y
 
 
+# -------------------------
+# MLP (feed-forward network)
+# -------------------------
 class MLP(nn.Module):
     def __init__(self, cfg: GPTConfig):
         super().__init__()
@@ -153,11 +356,14 @@ class MLP(nn.Module):
         return x
 
 
+# -------------------------
+# Transformer block
+# -------------------------
 class Block(nn.Module):
     def __init__(self, cfg: GPTConfig):
         super().__init__()
         self.ln1 = nn.LayerNorm(cfg.n_embd)
-        self.attn = CausalSelfAttention(cfg)
+        self.attn = GroupedQueryAttention(cfg)
         self.ln2 = nn.LayerNorm(cfg.n_embd)
         self.mlp = MLP(cfg)
 
@@ -167,6 +373,9 @@ class Block(nn.Module):
         return x
 
 
+# -------------------------
+# GPT model
+# -------------------------
 class GPT(nn.Module):
     def __init__(self, cfg: GPTConfig, vocab_size: int):
         super().__init__()
@@ -177,7 +386,9 @@ class GPT(nn.Module):
         self.pos_emb = nn.Embedding(cfg.block_size, cfg.n_embd)
         self.drop = nn.Dropout(cfg.dropout)
 
-        self.blocks = nn.ModuleList([Block(cfg) for _ in range(cfg.n_layer)])
+        self.blocks = nn.ModuleList(
+            [Block(cfg) for _ in range(cfg.n_layer)]
+        )  # transformer blocks
         self.ln_f = nn.LayerNorm(cfg.n_embd)
 
         # language modeling head
