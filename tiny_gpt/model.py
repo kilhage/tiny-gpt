@@ -1,62 +1,10 @@
 import math
-import time
-from dataclasses import dataclass
 
-import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-
-# -------------------------
-# Config
-# -------------------------
-@dataclass
-class GPTConfig:
-    # data
-    batch_size: int = 64
-    block_size: int = 256  # context length
-    # model
-    n_layer: int = 6
-
-    # normal multi-head attention
-    n_head: int = 8
-
-    # GQA
-    n_q_head: int = 8
-    n_kv_head: int = 4
-
-    n_embd: int = 384
-    dropout: float = 0.1
-    # training
-    max_steps: int = 3000
-    eval_interval: int = 250
-    eval_batches: int = 50
-    learning_rate: float = 3e-4
-    weight_decay: float = 0.1
-    grad_clip: float = 1.0
-
-    # runtime
-    device: str = "auto"  # "auto" | "mps" | "cpu"
-
-
-# -------------------------
-# Utilities
-# -------------------------
-def get_device(cfg: GPTConfig) -> torch.device:
-    if cfg.device == "cpu":
-        return torch.device("cpu")
-    if cfg.device == "mps":
-        return torch.device("mps")
-    # auto
-    if torch.backends.mps.is_available():
-        return torch.device("mps")
-    return torch.device("cpu")
-
-
-def set_seed(seed: int = 1337) -> None:
-    torch.manual_seed(seed)
-    np.random.seed(seed)
+from tiny_gpt.config import GPTConfig
 
 
 # -------------------------
@@ -448,83 +396,3 @@ class GPT(nn.Module):
             next_id = torch.multinomial(probs, num_samples=1)
             idx = torch.cat((idx, next_id), dim=1)
         return idx
-
-
-# -------------------------
-# Train / Eval
-# -------------------------
-@torch.no_grad()
-def estimate_loss(model: GPT, data: TextData, cfg: GPTConfig, device: torch.device):
-    model.eval()
-    out = {}
-    for split in ["train", "val"]:
-        losses = torch.zeros(cfg.eval_batches)
-        for i in range(cfg.eval_batches):
-            xb, yb = data.get_batch(split, cfg.batch_size, cfg.block_size, device)
-            _, loss = model(xb, yb)
-            losses[i] = loss.item()
-        out[split] = losses.mean().item()
-    model.train()
-    return out
-
-
-def main():
-    cfg = GPTConfig()
-    set_seed(1337)
-
-    # read dataset
-    with open("data.txt", "r", encoding="utf-8") as f:
-        text = f.read()
-
-    tokenizer = CharTokenizer(text)
-    data = TextData(text, tokenizer)
-
-    device = get_device(cfg)
-    print(f"Device: {device} | vocab_size={tokenizer.vocab_size}")
-
-    model = GPT(cfg, vocab_size=tokenizer.vocab_size).to(device)
-
-    # AdamW optimizer (standard for transformers)
-    optimizer = torch.optim.AdamW(
-        model.parameters(), lr=cfg.learning_rate, weight_decay=cfg.weight_decay
-    )
-
-    t0 = time.time()
-    for step in range(1, cfg.max_steps + 1):
-        xb, yb = data.get_batch("train", cfg.batch_size, cfg.block_size, device)
-
-        logits, loss = model(xb, yb)
-        optimizer.zero_grad(set_to_none=True)
-        loss.backward()
-
-        # gradient clipping helps stability
-        torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.grad_clip)
-        optimizer.step()
-
-        if step % cfg.eval_interval == 0 or step == 1:
-            losses = estimate_loss(model, data, cfg, device)
-            dt = time.time() - t0
-            print(
-                f"step {step:5d} | train {losses['train']:.4f} | val {losses['val']:.4f} | elapsed {dt:.1f}s"
-            )
-
-    # Save checkpoint
-    ckpt = {
-        "model_state": model.state_dict(),
-        "config": cfg.__dict__,
-        "stoi": tokenizer.stoi,
-        "itos": tokenizer.itos,
-    }
-    torch.save(ckpt, "tiny_gpt.pt")
-    print("Saved: tiny_gpt.pt")
-
-    # Demo generation
-    prompt = "Hello"
-    idx = torch.tensor([tokenizer.encode(prompt)], dtype=torch.long, device=device)
-    out = model.generate(idx, max_new_tokens=400, temperature=0.9, top_k=50)[0].tolist()
-    print("\n--- SAMPLE ---")
-    print(tokenizer.decode(out))
-
-
-if __name__ == "__main__":
-    main()

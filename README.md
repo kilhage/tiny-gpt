@@ -15,9 +15,11 @@ This repo intentionally stays small and readable rather than fast or feature-com
 
 ## Repo layout
 
-- **`tiny_gpt.py`**: the whole project in one file (model, data batching, training loop, sampling, checkpoint save).
-- **`generate.py`**: loads `tiny_gpt.pt` and generates text from a prompt.
-- **`dataset.py`**: loads `data.txt` from Tiny Shakespeare.
+- **`train.py`**: training script (reads `data.txt`, trains, saves `tiny_gpt.pt`).
+- **`tiny_gpt/model.py`**: GPT model + tokenizer/data helpers + sampling (`generate`).
+- **`tiny_gpt/trainer.py`**: evaluation helpers (loss estimation).
+- **`tiny_gpt/generate.py`**: loads `tiny_gpt.pt` and generates text from a prompt.
+- **`tiny_gpt/dataset.py`**: downloads a starter dataset (Tiny Shakespeare) to `data.txt`.
 - **`data.txt`**: your training corpus (plain UTF-8 text).
 - **`pyproject.toml` / `uv.lock`**: Python deps (works great with `uv`).
 
@@ -97,11 +99,11 @@ Flags: `--force` re-downloads even if `data.txt` exists, `--output` changes the 
 
 ## Train
 
-`tiny_gpt.py` reads `data.txt`, trains for `GPTConfig.max_steps`, evaluates periodically, then saves a checkpoint to `tiny_gpt.pt` and prints a sample generation.
+`train.py` reads `data.txt`, trains for `GPTConfig.max_steps`, evaluates periodically, then saves a checkpoint to `tiny_gpt.pt` and prints a sample generation.
 
 ```bash
 # uv
-uv run python tiny_gpt.py
+uv run python train.py
 ```
 
 Output includes:
@@ -119,10 +121,10 @@ After training, run:
 
 ```bash
 # uv
-uv run python generate.py -p "Hello"
+uv run python tiny_gpt/generate.py -p "Hello"
 ```
 
-`generate.py` loads:
+`tiny_gpt/generate.py` loads:
 
 - `model_state`: weights
 - `config`: the `GPTConfig` values used for training
@@ -161,7 +163,7 @@ Attention uses a **lower-triangular (causal) mask** so token \(t\) can only atte
 
 ## Configuration tips (speed vs quality)
 
-Edit `GPTConfig` in `tiny_gpt.py`.
+Edit `GPTConfig` in `tiny_gpt/config.py`.
 
 - **Faster**:
   - reduce `block_size` (e.g. 256 → 128)
