@@ -106,16 +106,43 @@ Heads specialize because they operate in **different learned similarity spaces**
 
 ## Why multi-head attention exists
 
-A single attention head must choose _one_ way to relate tokens.
+A single attention head provides **one communication channel**.
 
-Language requires many relationships to be considered simultaneously.
+It defines:
 
-Multi-head attention provides:
+- one notion of similarity (one Q/K space),
+- one competition over tokens (one softmax),
+- one way to copy information (one V space).
 
-- multiple independent match functions (Q/K spaces),
-- multiple independent copy channels (V spaces).
+That means a single head must collapse all relationships into one weighted mix.
 
-> Multi-head attention is like running several different searches over the same sentence in parallel, then combining the evidence.
+Language does not work that way.
+
+At any moment, a token may need to consider:
+
+- syntactic structure,
+- semantic reference,
+- long-range patterns,
+- local context,
+- formatting or positional cues.
+
+These relationships are not compatible in a single similarity space.
+
+Multi-head attention solves this by providing multiple independent communication channels.
+
+Each head:
+
+- asks a different question,
+- attends to different tokens,
+- copies different information.
+
+The outputs are then combined.
+
+> Multi-head attention is not redundancy — it is factorized communication.
+
+Or equivalently:
+
+> Multi-head attention is like running several independent searches over the same context in parallel, each optimized for a different kind of relationship.
 
 Heads are not explicitly assigned roles; specialization emerges naturally during end-to-end training.
 
