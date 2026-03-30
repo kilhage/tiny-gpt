@@ -2,8 +2,8 @@ import argparse
 
 import torch
 
-# must match tiny_gpt.py class names, so simplest is: import them
-from tiny_gpt import GPT, CharTokenizer, GPTConfig
+from tiny_gpt.config import GPTConfig
+from tiny_gpt.model import GPT, CharTokenizer
 
 
 def main():
